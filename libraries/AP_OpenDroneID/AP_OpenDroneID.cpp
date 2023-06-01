@@ -38,6 +38,7 @@
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Parachute/AP_Parachute.h>
 #include <AP_Vehicle/AP_Vehicle.h>
+#include <AP_DroneCAN/AP_DroneCAN.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -133,7 +134,7 @@ bool AP_OpenDroneID::pre_arm_check(char* failmsg, uint8_t failmsg_len)
         return false;
     }
     
-    if (arm_status.status != MAV_ODID_GOOD_TO_ARM) {
+    if (arm_status.status != MAV_ODID_ARM_STATUS_GOOD_TO_ARM) {
         strncpy(failmsg, arm_status.error, failmsg_len);
         return false;
     }
@@ -156,6 +157,20 @@ void AP_OpenDroneID::update()
 
     send_dynamic_out();
     send_static_out();
+#if HAL_ENABLE_DRONECAN_DRIVERS
+    uint8_t can_num_drivers = AP::can().get_num_drivers();
+    for (uint8_t i = 0; i < can_num_drivers; i++) {
+        AP_DroneCAN *dronecan = AP_DroneCAN::get_dronecan(i);
+        if (dronecan == nullptr) {
+            continue;
+        }
+        if (dronecan->get_driver_index()+1 != _can_driver) {
+            continue;
+        }
+        // send messages
+        dronecan_send(dronecan);
+    }
+#endif
 }
 
 // local payload space check which treats invalid channel as having space

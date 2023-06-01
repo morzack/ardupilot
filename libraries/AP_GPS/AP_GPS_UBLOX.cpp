@@ -425,12 +425,14 @@ AP_GPS_UBLOX::_request_next_config(void)
 
 
     case STEP_M10: {
-        // special handling of M10 config
-        const config_list *list = config_M10;
-        const uint8_t list_length = ARRAY_SIZE(config_M10);
-        Debug("Sending M10 settings");
-        if (!_configure_config_set(list, list_length, CONFIG_M10, UBX_VALSET_LAYER_RAM | UBX_VALSET_LAYER_BBR)) {
-            _next_message--;
+        if (_hardware_generation == UBLOX_M10) {
+            // special handling of M10 config
+            const config_list *list = config_M10;
+            const uint8_t list_length = ARRAY_SIZE(config_M10);
+            Debug("Sending M10 settings");
+            if (!_configure_config_set(list, list_length, CONFIG_M10, UBX_VALSET_LAYER_RAM | UBX_VALSET_LAYER_BBR)) {
+                _next_message--;
+            }
         }
         break;
     }
@@ -1807,7 +1809,11 @@ AP_GPS_UBLOX::_configure_valget(ConfigKey key)
 }
 
 /*
- *  configure F9 based key/value pair for a complete config list
+ *  configure F9 based key/value pair for a complete configuration set
+ *
+ *  this method requests each configuration variable from the GPS.
+ *  When we handle the reply in _parse_gps we may then choose to set a
+ *  MSG_CFG_VALSET back to the GPS if we don't like its response.
  */
 bool
 AP_GPS_UBLOX::_configure_config_set(const config_list *list, uint8_t count, uint32_t unconfig_bit, uint8_t layers)

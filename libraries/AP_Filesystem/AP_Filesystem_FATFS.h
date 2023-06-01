@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include "AP_Filesystem_backend.h"
 
+#if AP_FILESYSTEM_FATFS_ENABLED
+
 // Seek offset macros
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -30,6 +32,7 @@ public:
     int unlink(const char *pathname) override;
     int mkdir(const char *pathname) override;
     void *opendir(const char *pathname) override;
+    int rename(const char *oldpath, const char *newpath) override;
     struct dirent *readdir(void *dirp) override;
     int closedir(void *dirp) override;
 
@@ -48,10 +51,20 @@ public:
     // unmount filesystem for reboot
     void unmount(void) override;
 
-    // format sdcard
+    // format sdcard.  This is async, monitor get_format_status for progress
     bool format(void) override;
+    AP_Filesystem_Backend::FormatStatus get_format_status() const override;
+
+    // block filesystem access
+    void block_access(void) override { sem.take_blocking(); }
+
+    // free filesystem access
+    void free_access(void) override { sem.give(); }
 
 private:
     void format_handler(void);
-    bool format_pending;
+    FormatStatus format_status;
+    static HAL_Semaphore sem;
 };
+
+#endif  // #if AP_FILESYSTEM_FATFS_ENABLED

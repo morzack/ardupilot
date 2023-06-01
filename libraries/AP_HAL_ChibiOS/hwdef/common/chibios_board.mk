@@ -5,7 +5,11 @@
 
 # Compiler options here.
 ifeq ($(USE_OPT),)
-  USE_OPT = -g -fomit-frame-pointer -falign-functions=16
+  USE_OPT = -fomit-frame-pointer -falign-functions=16
+endif
+
+ifeq ($(ENABLE_DEBUG_SYMBOLS), yes)
+  USE_OPT += -g
 endif
 
 # C specific options here (added to USE_OPT).
@@ -109,7 +113,7 @@ include $(CHIBIOS)/$(CHIBIOS_PLATFORM_MK)
 include $(CHIBIOS)/os/hal/osal/rt-nil/osal.mk
 # RTOS files (optional).
 include $(CHIBIOS)/os/rt/rt.mk
-include $(CHIBIOS)/os/common/ports/ARMCMx/compilers/GCC/mk/port_v7m.mk
+include $(CHIBIOS)/os/common/ports/ARMv7-M/compilers/GCC/mk/port.mk
 # Other files (optional).
 #include $(CHIBIOS)/test/rt/test.mk
 include $(CHIBIOS)/os/hal/lib/streams/streams.mk
@@ -129,12 +133,18 @@ CSRC += $(HWDEF)/common/stubs.c \
 	   $(HWDEF)/common/usbcfg.c \
 	   $(HWDEF)/common/usbcfg_dualcdc.c \
 	   $(HWDEF)/common/usbcfg_common.c \
+	   $(HWDEF)/common/usbcfg_cdc_msd.c \
 	   $(HWDEF)/common/flash.c \
 	   $(HWDEF)/common/malloc.c \
 	   $(HWDEF)/common/hrt.c \
        $(HWDEF)/common/stm32_util.c \
        $(HWDEF)/common/bouncebuffer.c \
        $(HWDEF)/common/watchdog.c
+
+ifeq ($(USE_USB_MSD),yes)
+CSRC += $(CHIBIOS)/os/various/scsi_bindings/lib_scsi.c \
+        $(CHIBIOS)/os/hal/src/hal_usb_msd.c
+endif
 
 #	   $(TESTSRC) \
 #	   test.c
@@ -174,11 +184,17 @@ ASMSRC = $(ALLASMSRC)
 ASMXSRC = $(ALLXASMSRC)
 
 INCDIR = $(CHIBIOS)/os/license \
+         $(CHIBIOS)/os/various \
          $(ALLINC) $(HWDEF)/common
 
 ifneq ($(CRASHCATCHER),)
 INCDIR += $(CRASHCATCHER)/include
 endif
+
+ifeq ($(USE_USB_MSD),yes)
+INCDIR += $(CHIBIOS)/os/various/scsi_bindings
+endif
+
 #
 # Project, sources and paths
 ##############################################################################
@@ -241,6 +257,10 @@ endif
 ifeq ($(ENABLE_STATS),yes)
  UDEFS += -DHAL_ENABLE_THREAD_STATISTICS
  ASXFLAGS += -DHAL_ENABLE_THREAD_STATISTICS
+endif
+
+ifneq ($(AP_BOARD_START_TIME),)
+ UDEFS += -DAP_BOARD_START_TIME=$(AP_BOARD_START_TIME)
 endif
 
 # Define ASM defines here

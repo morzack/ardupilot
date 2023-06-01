@@ -17,22 +17,43 @@
 #include <hal.h>
 #include "SPIDevice.h"
 #include "sdcard.h"
+#include "bouncebuffer.h"
 #include "hwdef/common/spi_hook.h"
 #include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_Filesystem/AP_Filesystem.h>
 #include "bouncebuffer.h"
+#include "stm32_util.h"
+#include "hwdef/common/usbcfg.h"
+#include "stm32_util.h"
 
 extern const AP_HAL::HAL& hal;
 
+
+#if HAL_HAVE_USB_CDC_MSD
+bool write_protected = false;
+static void block_filesys_access()
+{
+    AP::FS().block_access();
+    write_protected = true;
+}
+
+static void free_filesys_access()
+{
+    write_protected = false;
+    AP::FS().free_access();
+}
+#endif
+
 #ifdef USE_POSIX
 static FATFS SDC_FS; // FATFS object
-static bool sdcard_running;
+#ifndef HAL_BOOTLOADER_BUILD
 static HAL_Semaphore sem;
+#endif
+static bool sdcard_running;
 #endif
 
 #if HAL_USE_SDC
 static SDCConfig sdcconfig = {
-  NULL,
   SDC_MODE_4BIT,
   0
 };
@@ -44,6 +65,11 @@ static SPIConfig lowspeed;
 static SPIConfig highspeed;
 #endif
 
+#if HAL_HAVE_USB_CDC_MSD
+static uint8_t blkbuf[512];
+static uint8_t txbuf[512];
+#endif
+
 /*
   initialise microSD card if avaialble. This is called during
   AP_BoardConfig initialisation. The parameter BRD_SD_SLOWDOWN
@@ -52,9 +78,13 @@ static SPIConfig highspeed;
 bool sdcard_init()
 {
 #ifdef USE_POSIX
+#ifndef HAL_BOOTLOADER_BUILD
     WITH_SEMAPHORE(sem);
 
     uint8_t sd_slowdown = AP_BoardConfig::get_sdcard_slowdown();
+#else
+    uint8_t sd_slowdown = 0;  // maybe take from a define?
+#endif
 #if HAL_USE_SDC
 
 #if STM32_SDC_USE_SDMMC2 == TRUE
@@ -81,17 +111,45 @@ bool sdcard_init()
             sdcStop(&sdcd);
             continue;
         }
-        if (f_mount(&SDC_FS, "/", 1) != FR_OK) {
+        FRESULT res = f_mount(&SDC_FS, "/", 1);
+#if defined(HAL_SDMMC_TYPE_EMMC)
+        if (res == FR_NO_FILESYSTEM) {
+            //format eMMC
+            MKFS_PARM opt = {0};
+            opt.fmt = FM_EXFAT;
+            res = f_mkfs("/", &opt, 0, 4096);
+            if (res == FR_OK) {
+                res = f_mount(&SDC_FS, "/", 1);
+            }
+        }
+#endif
+        if (res != FR_OK) {
             sdcDisconnect(&sdcd);
             sdcStop(&sdcd);
             continue;
         }
         printf("Successfully mounted SDCard (slowdown=%u)\n", (unsigned)sd_slowdown);
-
+#if HAL_HAVE_USB_CDC_MSD
+        if (USBMSD1.state == USB_MSD_UNINIT) {
+            msdObjectInit(&USBMSD1);
+            msdStart(&USBMSD1, 
+    #if STM32_USB_USE_OTG1
+                    &USBD1,
+    #else
+                    &USBD2,
+    #endif
+                    (BaseBlockDevice*)&SDCD1, blkbuf, txbuf,  NULL, NULL, block_filesys_access, free_filesys_access);
+        }
+#endif
         sdcard_running = true;
         return true;
     }
 #elif HAL_USE_MMC_SPI
+    if (MMCD1.buffer == nullptr) {
+        // allocate 16 byte non-cacheable buffer for microSD
+        MMCD1.buffer = (uint8_t*)malloc_axi_sram(MMC_BUFFER_SIZE);
+    }
+
     if (sdcard_running) {
         sdcard_stop();
     }
@@ -106,7 +164,7 @@ bool sdcard_init()
     }
     device->set_slowdown(sd_slowdown);
 
-    mmcObjectInit(&MMCD1);
+    mmcObjectInit(&MMCD1, MMCD1.buffer);
 
     mmcconfig.spip =
             static_cast<ChibiOS::SPIDevice*>(device.get())->get_driver();
@@ -134,9 +192,19 @@ bool sdcard_init()
     }
 #endif
     sdcard_running = false;
-#endif
+#endif  // USE_POSIX
     return false;
 }
+
+#if HAL_USE_SDC
+bool sdc_lld_is_write_protected(SDCDriver *sdcp) {
+#if HAL_HAVE_USB_CDC_MSD
+    return write_protected;
+#else
+    return false;
+#endif
+}
+#endif
 
 /*
   stop sdcard interface (for reboot)
@@ -172,7 +240,7 @@ bool sdcard_retry(void)
 #ifdef USE_POSIX
     if (!sdcard_running) {
         if (sdcard_init()) {
-#if HAVE_FILESYSTEM_SUPPORT
+#if AP_FILESYSTEM_FILE_WRITING_ENABLED
             // create APM directory
             AP::FS().mkdir("/APM");
 #endif
@@ -199,6 +267,22 @@ void spiStartHook(SPIDriver *spip, const SPIConfig *config)
 
 void spiStopHook(SPIDriver *spip)
 {
+}
+
+__RAMFUNC__ void spiAcquireBusHook(SPIDriver *spip)
+{
+    if (sdcard_running) {
+        ChibiOS::SPIDevice *devptr = static_cast<ChibiOS::SPIDevice*>(device.get());
+        devptr->acquire_bus(true, true);
+    }
+}
+
+__RAMFUNC__ void spiReleaseBusHook(SPIDriver *spip)
+{
+    if (sdcard_running) {
+        ChibiOS::SPIDevice *devptr = static_cast<ChibiOS::SPIDevice*>(device.get());
+        devptr->acquire_bus(false, true);
+    }
 }
 
 __RAMFUNC__ void spiSelectHook(SPIDriver *spip)
